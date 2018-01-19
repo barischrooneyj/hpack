@@ -25,6 +25,7 @@ module Hpack.Config (
 , GitRef
 , GitUrl
 , GhcOption
+, Verbatim
 , CustomSetup(..)
 , Section(..)
 , Library(..)
@@ -108,6 +109,7 @@ package name version = Package {
   , packageExecutables = mempty
   , packageTests = mempty
   , packageBenchmarks = mempty
+  , packageVerbatim = Nothing
   }
 
 renamePackage :: String -> Package -> Package
@@ -138,7 +140,7 @@ packageDependencies Package{..} = nub . sortBy (comparing (lexicographically . f
     deps xs = [(name, version) | (name, version) <- (Map.toList . unDependencies . sectionDependencies) xs]
 
 section :: a -> Section a
-section a = Section a [] mempty [] [] [] [] [] [] [] [] [] [] [] [] [] [] [] [] [] Nothing [] mempty
+section a = Section a [] mempty [] [] [] [] [] [] [] [] [] [] [] [] [] [] [] [] [] Nothing [] mempty Nothing
 
 packageConfig :: FilePath
 packageConfig = "package.yaml"
@@ -192,6 +194,8 @@ instance HasFieldNames ExecutableSection
 instance FromJSON ExecutableSection where
   parseJSON = genericParseJSON
 
+type Verbatim = String
+
 data CommonOptions capture cSources jsSources a = CommonOptions {
   commonOptionsSourceDirs :: Maybe (List FilePath)
 , commonOptionsDependencies :: Maybe Dependencies
@@ -215,6 +219,7 @@ data CommonOptions capture cSources jsSources a = CommonOptions {
 , commonOptionsBuildable :: Maybe Bool
 , commonOptionsWhen :: Maybe (List (ConditionalSection capture cSources jsSources a))
 , commonOptionsBuildTools :: Maybe Dependencies
+, commonOptionsVerbatim :: Maybe Verbatim
 } deriving (Functor, Generic)
 
 instance (Monoid cSources, Monoid jsSources) => Monoid (CommonOptions capture cSources jsSources a) where
@@ -241,6 +246,7 @@ instance (Monoid cSources, Monoid jsSources) => Monoid (CommonOptions capture cS
   , commonOptionsBuildable = Nothing
   , commonOptionsWhen = Nothing
   , commonOptionsBuildTools = Nothing
+  , commonOptionsVerbatim = Nothing
   }
   mappend a b = CommonOptions {
     commonOptionsSourceDirs = commonOptionsSourceDirs a <> commonOptionsSourceDirs b
@@ -265,6 +271,7 @@ instance (Monoid cSources, Monoid jsSources) => Monoid (CommonOptions capture cS
   , commonOptionsBuildable = commonOptionsBuildable b <|> commonOptionsBuildable a
   , commonOptionsWhen = commonOptionsWhen a <> commonOptionsWhen b
   , commonOptionsBuildTools = commonOptionsBuildTools b <> commonOptionsBuildTools a
+  , commonOptionsVerbatim = commonOptionsVerbatim a <> commonOptionsVerbatim b
   }
 
 type ParseCommonOptions = CommonOptions CaptureUnknownFields ParseCSources ParseJsSources
@@ -590,6 +597,7 @@ data Package = Package {
 , packageExecutables :: Map String (Section Executable)
 , packageTests :: Map String (Section Executable)
 , packageBenchmarks :: Map String (Section Executable)
+, packageVerbatim :: Maybe Verbatim
 } deriving (Eq, Show)
 
 data CustomSetup = CustomSetup {
@@ -633,6 +641,7 @@ data Section a = Section {
 , sectionBuildable :: Maybe Bool
 , sectionConditionals :: [Conditional (Section a)]
 , sectionBuildTools :: Dependencies
+, sectionVerbatim :: Maybe Verbatim
 } deriving (Eq, Show, Functor, Foldable, Traversable)
 
 data Conditional a = Conditional {
@@ -771,7 +780,11 @@ toExecutableMap name executables mExecutable = do
 type GlobalOptions = CommonOptions Identity CSources JsSources Empty
 
 toPackage_ :: MonadIO m => FilePath -> Product GlobalOptions (PackageConfig Identity CSources JsSources) -> Warnings m Package
-toPackage_ dir (Product globalOptions PackageConfig{..}) = do
+toPackage_ dir (Product g PackageConfig{..}) = do
+  let
+    globalVerbatim = commonOptionsVerbatim g
+    globalOptions = g {commonOptionsVerbatim = Nothing}
+
   mLibrary <- liftIO $ traverse (toLibrary dir packageName_ globalOptions) packageConfigLibrary
 
   internalLibraries <- liftIO $ toInternalLibraries dir packageName_ globalOptions packageConfigInternalLibraries
@@ -831,6 +844,7 @@ toPackage_ dir (Product globalOptions PackageConfig{..}) = do
       , packageExecutables = executables
       , packageTests = tests
       , packageBenchmarks = benchmarks
+      , packageVerbatim = globalVerbatim
       }
 
   tell nameWarnings
@@ -1127,6 +1141,7 @@ toSection_ (Product CommonOptions{..} a) = Section {
       , sectionPkgConfigDependencies = fromMaybeList commonOptionsPkgConfigDependencies
       , sectionConditionals = conditionals
       , sectionBuildTools = fromMaybe mempty commonOptionsBuildTools
+      , sectionVerbatim = commonOptionsVerbatim
       }
   where
     toSectionI_ :: Identity (WithCommonOptions Identity CSources JsSources a) -> Section a
